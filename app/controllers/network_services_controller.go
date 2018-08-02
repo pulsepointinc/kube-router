@@ -170,7 +170,7 @@ func (nsc *NetworkServicesController) sync() error {
 
 	nsc.serviceMap = buildServicesInfo()
 	nsc.nodesMap = buildNodesInfo(nsc.nodeWeightAnnotation, nsc.defaultNodeWeight)
-	nsc.endpointsMap = buildEndpointsInfo(nsc.nodesMap)
+	nsc.endpointsMap = buildEndpointsInfo(nsc.nodesMap, nsc.defaultNodeWeight)
 	err = nsc.syncHairpinIptablesRules()
 	if err != nil {
 		glog.Errorf("Error syncing hairpin iptable rules: %s", err.Error())
@@ -265,20 +265,24 @@ func (nsc *NetworkServicesController) OnEndpointsUpdate(endpointsUpdate *watcher
 	glog.V(1).Info("Received endpoints update from watch API")
 	if !(watchers.ServiceWatcher.HasSynced() && watchers.EndpointsWatcher.HasSynced() && watchers.NodeWatcher.HasSynced()) {
 		glog.V(1).Info("Skipping ipvs server sync as local cache is not synced yet")
+	} else {
+		nsc.buildAndSyncEndpoints()
 	}
-
-	nsc.buildAndSyncEndpoints()
 }
 
 func (nsc *NetworkServicesController) buildAndSyncEndpoints() {
-	// build new endpoints map to reflect the change
-	newEndpointsMap := buildEndpointsInfo(nsc.nodesMap)
+	if len(nsc.nodesMap) != 0 {
+		// build new endpoints map to reflect the change
+		newEndpointsMap := buildEndpointsInfo(nsc.nodesMap, nsc.defaultNodeWeight)
 
-	if len(newEndpointsMap) != len(nsc.endpointsMap) || !reflect.DeepEqual(newEndpointsMap, nsc.endpointsMap) {
-		nsc.endpointsMap = newEndpointsMap
-		nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
+		if len(newEndpointsMap) != len(nsc.endpointsMap) || !reflect.DeepEqual(newEndpointsMap, nsc.endpointsMap) {
+			nsc.endpointsMap = newEndpointsMap
+			nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
+		} else {
+			glog.V(1).Info("Skipping ipvs server sync on endpoints because nothing changed")
+		}
 	} else {
-		glog.V(1).Info("Skipping ipvs server sync on endpoints because nothing changed")
+		glog.V(1).Info("Skipping building and syncing of endpoints because node info map is not populated yet")
 	}
 }
 
@@ -927,7 +931,7 @@ func shuffle(endPoints []endpointsInfo) []endpointsInfo {
 	return endPoints
 }
 
-func buildEndpointsInfo(nodeMap nodeInfoMap) endpointsInfoMap {
+func buildEndpointsInfo(nodeMap nodeInfoMap, defaultNodeWeight int) endpointsInfoMap {
 	endpointsMap := make(endpointsInfoMap)
 	for _, ep := range watchers.EndpointsWatcher.List() {
 		for _, epSubset := range ep.Subsets {
@@ -936,11 +940,18 @@ func buildEndpointsInfo(nodeMap nodeInfoMap) endpointsInfoMap {
 				endpoints := make([]endpointsInfo, 0)
 				for _, addr := range epSubset.Addresses {
 					glog.V(2).Infof("Processing %+v", addr)
-					nodeLookup := addr.NodeName
-					if nodeLookup == nil {
-						nodeLookup = &addr.IP
+					nodeWeight := defaultNodeWeight
+					var nodeInfo *nodeInfo
+					if addr.NodeName != nil {
+						nodeInfo = nodeMap[*addr.NodeName]
 					}
-					endpoints = append(endpoints, endpointsInfo{ip: addr.IP, port: int(port.Port), weight: nodeMap[*nodeLookup].weight})
+					if nodeInfo == nil && len(addr.IP) > 0 {
+						nodeInfo = nodeMap[addr.IP]
+					}
+					if nodeInfo != nil {
+						nodeWeight = nodeInfo.weight
+					}
+					endpoints = append(endpoints, endpointsInfo{ip: addr.IP, port: int(port.Port), weight: nodeWeight})
 				}
 				endpointsMap[svcId] = shuffle(endpoints)
 			}
