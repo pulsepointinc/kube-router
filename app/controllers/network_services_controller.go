@@ -56,18 +56,21 @@ var (
 
 // NetworkServicesController struct stores information needed by the controller
 type NetworkServicesController struct {
-	nodeIP              net.IP
-	nodeHostName        string
-	syncPeriod          time.Duration
-	mu                  sync.Mutex
-	serviceMap          serviceInfoMap
-	endpointsMap        endpointsInfoMap
-	podCidr             string
-	masqueradeAll       bool
-	globalHairpin       bool
-	client              *kubernetes.Clientset
-	nodeportBindOnAllIp bool
-	MetricsEnabled      bool
+	nodeIP               net.IP
+	nodeHostName         string
+	syncPeriod           time.Duration
+	mu                   sync.Mutex
+	serviceMap           serviceInfoMap
+	endpointsMap         endpointsInfoMap
+	nodesMap             nodeInfoMap
+	podCidr              string
+	masqueradeAll        bool
+	globalHairpin        bool
+	client               *kubernetes.Clientset
+	nodeportBindOnAllIp  bool
+	MetricsEnabled       bool
+	nodeWeightAnnotation string
+	defaultNodeWeight    int
 }
 
 // internal representation of kubernetes service
@@ -92,12 +95,22 @@ type serviceInfoMap map[string]*serviceInfo
 
 // internal representation of endpoints
 type endpointsInfo struct {
-	ip   string
-	port int
+	ip     string
+	port   int
+	weight int
 }
 
 // map of all endpoints, with unique service id(namespace name, service name, port) as key
 type endpointsInfoMap map[string][]endpointsInfo
+
+// internal representation of nodes
+type nodeInfo struct {
+	nodeName string
+	weight   int
+}
+
+//map of all nodes by the node name
+type nodeInfoMap map[string]*nodeInfo
 
 // Run periodically sync ipvs configuration to reflect desired state of services and endpoints
 func (nsc *NetworkServicesController) Run(healthChan chan<- *ControllerHeartbeat, stopCh <-chan struct{}, wg *sync.WaitGroup) error {
@@ -129,7 +142,7 @@ func (nsc *NetworkServicesController) Run(healthChan chan<- *ControllerHeartbeat
 		default:
 		}
 
-		if watchers.PodWatcher.HasSynced() && watchers.NetworkPolicyWatcher.HasSynced() {
+		if watchers.PodWatcher.HasSynced() && watchers.NetworkPolicyWatcher.HasSynced() && watchers.NodeWatcher.HasSynced() {
 			glog.V(1).Info("Performing periodic sync of ipvs services")
 			err := nsc.sync()
 			if err != nil {
@@ -156,7 +169,8 @@ func (nsc *NetworkServicesController) sync() error {
 	defer nsc.mu.Unlock()
 
 	nsc.serviceMap = buildServicesInfo()
-	nsc.endpointsMap = buildEndpointsInfo()
+	nsc.nodesMap = buildNodesInfo(nsc.nodeWeightAnnotation, nsc.defaultNodeWeight)
+	nsc.endpointsMap = buildEndpointsInfo(nsc.nodesMap)
 	err = nsc.syncHairpinIptablesRules()
 	if err != nil {
 		glog.Errorf("Error syncing hairpin iptable rules: %s", err.Error())
@@ -249,12 +263,16 @@ func (nsc *NetworkServicesController) OnEndpointsUpdate(endpointsUpdate *watcher
 	defer nsc.mu.Unlock()
 
 	glog.V(1).Info("Received endpoints update from watch API")
-	if !(watchers.ServiceWatcher.HasSynced() && watchers.EndpointsWatcher.HasSynced()) {
+	if !(watchers.ServiceWatcher.HasSynced() && watchers.EndpointsWatcher.HasSynced() && watchers.NodeWatcher.HasSynced()) {
 		glog.V(1).Info("Skipping ipvs server sync as local cache is not synced yet")
 	}
 
+	nsc.buildAndSyncEndpoints()
+}
+
+func (nsc *NetworkServicesController) buildAndSyncEndpoints() {
 	// build new endpoints map to reflect the change
-	newEndpointsMap := buildEndpointsInfo()
+	newEndpointsMap := buildEndpointsInfo(nsc.nodesMap)
 
 	if len(newEndpointsMap) != len(nsc.endpointsMap) || !reflect.DeepEqual(newEndpointsMap, nsc.endpointsMap) {
 		nsc.endpointsMap = newEndpointsMap
@@ -271,7 +289,7 @@ func (nsc *NetworkServicesController) OnServiceUpdate(serviceUpdate *watchers.Se
 	defer nsc.mu.Unlock()
 
 	glog.V(1).Info("Received service update from watch API")
-	if !(watchers.ServiceWatcher.HasSynced() && watchers.EndpointsWatcher.HasSynced()) {
+	if !(watchers.ServiceWatcher.HasSynced() && watchers.EndpointsWatcher.HasSynced() && watchers.NodeWatcher.HasSynced()) {
 		glog.V(1).Info("Skipping ipvs server sync as local cache is not synced yet")
 	}
 
@@ -283,6 +301,27 @@ func (nsc *NetworkServicesController) OnServiceUpdate(serviceUpdate *watchers.Se
 		nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
 	} else {
 		glog.V(1).Info("Skipping ipvs server sync on service update because nothing changed")
+	}
+}
+
+// OnNodeUpdate handle change in node update from the API server
+func (nsc *NetworkServicesController) OnNodeUpdate(nodeUpdate *watchers.NodeUpdate) {
+	nsc.mu.Lock()
+	defer nsc.mu.Unlock()
+
+	glog.V(1).Info("Received service update from watch API")
+	if !(watchers.ServiceWatcher.HasSynced() && watchers.EndpointsWatcher.HasSynced() && watchers.NodeWatcher.HasSynced()) {
+		glog.V(1).Info("Skipping ipvs server sync as local cache is not synced yet")
+	}
+
+	newNodeMap := buildNodesInfo(nsc.nodeWeightAnnotation, nsc.defaultNodeWeight)
+
+	if len(newNodeMap) != len(nsc.nodesMap) || !reflect.DeepEqual(newNodeMap, nsc.nodesMap) {
+		nsc.nodesMap = newNodeMap
+		glog.V(2).Info("Node ifo has changed, rebuilding endpoints")
+		nsc.buildAndSyncEndpoints()
+	} else {
+		glog.V(1).Info("Skipping ipvs server sync on node update because nothing changed")
 	}
 }
 
@@ -496,7 +535,7 @@ func (nsc *NetworkServicesController) syncIpvsServices(serviceInfoMap serviceInf
 				Address:       net.ParseIP(endpoint.ip),
 				AddressFamily: syscall.AF_INET,
 				Port:          uint16(endpoint.port),
-				Weight:        1,
+				Weight:        endpoint.weight,
 			}
 
 			err := ipvsAddServer(ipvsClusterVipSvc, &dst, svc.local, nsc.podCidr)
@@ -888,7 +927,7 @@ func shuffle(endPoints []endpointsInfo) []endpointsInfo {
 	return endPoints
 }
 
-func buildEndpointsInfo() endpointsInfoMap {
+func buildEndpointsInfo(nodeMap nodeInfoMap) endpointsInfoMap {
 	endpointsMap := make(endpointsInfoMap)
 	for _, ep := range watchers.EndpointsWatcher.List() {
 		for _, epSubset := range ep.Subsets {
@@ -896,13 +935,46 @@ func buildEndpointsInfo() endpointsInfoMap {
 				svcId := generateServiceId(ep.Namespace, ep.Name, port.Name)
 				endpoints := make([]endpointsInfo, 0)
 				for _, addr := range epSubset.Addresses {
-					endpoints = append(endpoints, endpointsInfo{ip: addr.IP, port: int(port.Port)})
+					glog.V(2).Infof("Processing %+v", addr)
+					nodeLookup := addr.NodeName
+					if nodeLookup == nil {
+						nodeLookup = &addr.IP
+					}
+					endpoints = append(endpoints, endpointsInfo{ip: addr.IP, port: int(port.Port), weight: nodeMap[*nodeLookup].weight})
 				}
 				endpointsMap[svcId] = shuffle(endpoints)
 			}
 		}
 	}
 	return endpointsMap
+}
+
+func buildNodesInfo(nodeWeightAnnotation string, defaultNodeWeight int) nodeInfoMap {
+	nodeMap := make(nodeInfoMap)
+	for _, node := range watchers.NodeWatcher.List() {
+		var weight int
+		var err error
+
+		if weight, err = utils.GetNodeWeight(node, nodeWeightAnnotation); err != nil {
+			glog.Warningf("Failed to get node weight from annotation %s, using default weight %d: %e", nodeWeightAnnotation, defaultNodeWeight, err)
+			weight = defaultNodeWeight
+		}
+
+		nodeInfo := nodeInfo{
+			nodeName: node.GetName(),
+			weight:   weight,
+		}
+
+		glog.V(2).Infof("Using weight '%d' for node '%s'", nodeInfo.weight, nodeInfo.nodeName)
+		nodeMap[nodeInfo.nodeName] = &nodeInfo
+
+		if ip, err := utils.GetNodeIP(node); err != nil {
+			glog.Warningf("Failed to get node IP for node '%s': %e", nodeInfo.nodeName, err)
+		} else {
+			nodeMap[ip.String()] = &nodeInfo
+		}
+	}
+	return nodeMap
 }
 
 // Add an iptable rule to masquerad outbound IPVS traffic. IPVS nat requires that reverse path traffic
@@ -1649,6 +1721,7 @@ func NewNetworkServicesController(clientset *kubernetes.Clientset, config *optio
 
 	nsc.serviceMap = make(serviceInfoMap)
 	nsc.endpointsMap = make(endpointsInfoMap)
+	nsc.nodesMap = make(nodeInfoMap)
 	nsc.client = clientset
 
 	nsc.masqueradeAll = false
@@ -1680,6 +1753,12 @@ func NewNetworkServicesController(clientset *kubernetes.Clientset, config *optio
 	}
 	nsc.nodeIP = nodeIP
 
+	nsc.nodeWeightAnnotation = config.NodeWeightAnnotation
+	glog.V(2).Infof("Network services controller using '%s' node weight annotation", nsc.nodeWeightAnnotation)
+	nsc.defaultNodeWeight = int(config.NodeDefaultWeight)
+	glog.V(2).Infof("Network services controller using '%d' as default node weight", nsc.defaultNodeWeight)
+
+	watchers.NodeWatcher.RegisterHandler(&nsc)
 	watchers.EndpointsWatcher.RegisterHandler(&nsc)
 	watchers.ServiceWatcher.RegisterHandler(&nsc)
 
