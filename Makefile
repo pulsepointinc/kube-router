@@ -168,7 +168,7 @@ gobgp: vendor/github.com/osrg/gobgp/gobgp
 	$(DOCKER) run -v $(PWD):/pwd golang:alpine \
 	    sh -c ' \
 	    apk add -U git && \
-		rm -rf /go/src && \
+	    rm -rf /go/src && \
 	    ln -sf /pwd/vendor /go/src && \
 	    CGO_ENABLED=0 GOARCH=$(GOARCH) go get github.com/osrg/gobgp/gobgp && \
 	    cp `find /go/bin -type f -name gobgp` /pwd'

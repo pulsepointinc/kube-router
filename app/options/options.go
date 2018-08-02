@@ -32,8 +32,8 @@ type KubeRouterConfig struct {
 	MetricsEnabled       bool
 	MetricsPath          string
 	MetricsPort          uint16
-	NodePortBindOnAllIp  bool
 	NodeDefaultWeight    uint16
+	NodePortBindOnAllIp  bool
 	NodeWeightAnnotation string
 	PeerASNs             []uint
 	PeerMultihopTtl      uint8
@@ -127,6 +127,6 @@ func (s *KubeRouterConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.Uint16Var(&s.HealthPort, "health-port", 20244, "Health check port, 0 = Disabled")
 	fs.Uint16Var(&s.NodeDefaultWeight, "node-default-weight", 1, "Default weight of a node, Default 1")
 	fs.StringVar(&s.NodeWeightAnnotation, "node-weight-annotation", "ingress.kubernetes.io/node-weight",
-		"Node annotation to determine the endpoin's weight based on the node it is running on. "+
+		"Node annotation to determine the endpoint's weight based on the node it is running on. "+
 			"If no annotation is found the \"node-default-weight\" will be used. Default \"ingress.kubernetes.io/node-weight\"")
 }

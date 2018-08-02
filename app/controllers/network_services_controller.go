@@ -318,7 +318,7 @@ func (nsc *NetworkServicesController) OnNodeUpdate(nodeUpdate *watchers.NodeUpda
 
 	if len(newNodeMap) != len(nsc.nodesMap) || !reflect.DeepEqual(newNodeMap, nsc.nodesMap) {
 		nsc.nodesMap = newNodeMap
-		glog.V(2).Info("Node ifo has changed, rebuilding endpoints")
+		glog.V(2).Info("Node info has changed, rebuilding endpoints")
 		nsc.buildAndSyncEndpoints()
 	} else {
 		glog.V(1).Info("Skipping ipvs server sync on node update because nothing changed")
