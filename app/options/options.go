@@ -8,41 +8,43 @@ import (
 )
 
 type KubeRouterConfig struct {
-	AdvertiseClusterIp  bool
-	AdvertiseExternalIp bool
-	BGPGracefulRestart  bool
-	CleanupConfig       bool
-	ClusterAsn          uint
-	ClusterCIDR         string
-	ConfigSyncPeriod    time.Duration
-	EnableiBGP          bool
-	EnableOverlay       bool
-	EnablePodEgress     bool
-	EnablePprof         bool
-	FullMeshMode        bool
-	GlobalHairpinMode   bool
-	HealthPort          uint16
-	HelpRequested       bool
-	HostnameOverride    string
-	IPTablesSyncPeriod  time.Duration
-	IpvsSyncPeriod      time.Duration
-	Kubeconfig          string
-	MasqueradeAll       bool
-	Master              string
-	MetricsEnabled      bool
-	MetricsPath         string
-	MetricsPort         uint16
-	NodePortBindOnAllIp bool
-	PeerASNs            []uint
-	PeerMultihopTtl     uint8
-	PeerPasswords       []string
-	PeerRouters         []net.IP
-	RoutesSyncPeriod    time.Duration
-	RunFirewall         bool
-	RunRouter           bool
-	RunServiceProxy     bool
-	Version             bool
-	VLevel              string
+	AdvertiseClusterIp   bool
+	AdvertiseExternalIp  bool
+	BGPGracefulRestart   bool
+	CleanupConfig        bool
+	ClusterAsn           uint
+	ClusterCIDR          string
+	ConfigSyncPeriod     time.Duration
+	EnableiBGP           bool
+	EnableOverlay        bool
+	EnablePodEgress      bool
+	EnablePprof          bool
+	FullMeshMode         bool
+	GlobalHairpinMode    bool
+	HealthPort           uint16
+	HelpRequested        bool
+	HostnameOverride     string
+	IPTablesSyncPeriod   time.Duration
+	IpvsSyncPeriod       time.Duration
+	Kubeconfig           string
+	MasqueradeAll        bool
+	Master               string
+	MetricsEnabled       bool
+	MetricsPath          string
+	MetricsPort          uint16
+	NodeDefaultWeight    uint16
+	NodePortBindOnAllIp  bool
+	NodeWeightAnnotation string
+	PeerASNs             []uint
+	PeerMultihopTtl      uint8
+	PeerPasswords        []string
+	PeerRouters          []net.IP
+	RoutesSyncPeriod     time.Duration
+	RunFirewall          bool
+	RunRouter            bool
+	RunServiceProxy      bool
+	Version              bool
+	VLevel               string
 	// FullMeshPassword    string
 }
 
@@ -123,4 +125,8 @@ func (s *KubeRouterConfig) AddFlags(fs *pflag.FlagSet) {
 	// 	"Password that cluster-node BGP servers will use to authenticate one another when \"--nodes-full-mesh\" is set.")
 	fs.StringVarP(&s.VLevel, "v", "v", "0", "log level for V logs")
 	fs.Uint16Var(&s.HealthPort, "health-port", 20244, "Health check port, 0 = Disabled")
+	fs.Uint16Var(&s.NodeDefaultWeight, "node-default-weight", 1, "Default weight of a node, Default 1")
+	fs.StringVar(&s.NodeWeightAnnotation, "node-weight-annotation", "ingress.kubernetes.io/node-weight",
+		"Node annotation to determine the endpoint's weight based on the node it is running on. "+
+			"If no annotation is found the \"node-default-weight\" will be used. Default \"ingress.kubernetes.io/node-weight\"")
 }

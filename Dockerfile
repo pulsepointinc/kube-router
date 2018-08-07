@@ -13,6 +13,7 @@ RUN apk add --no-cache \
       ipvsadm \
       conntrack-tools \
       curl \
+      libc6-compat \
       bash && \
     mkdir -p /var/lib/gobgp && \
     mkdir -p /usr/local/share/bash-completion && \
