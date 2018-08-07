@@ -68,7 +68,8 @@ vagrant-image-update: all ## Rebuild kube-router, update image in local VMs, and
 run: kube-router ## Runs "kube-router --help".
 	./kube-router --help
 
-container: multiarch-check Dockerfile.$(GOARCH).run kube-router gobgp multiarch-binverify ## Builds a Docker container image.
+#container: multiarch-check Dockerfile.$(GOARCH).run kube-router gobgp multiarch-binverify ## Builds a Docker container image.
+container: multiarch-check Dockerfile.$(GOARCH).run kube-router multiarch-binverify ## Builds a Docker container image.
 	@echo Starting kube-router container image build.
 	$(DOCKER) build -t "$(REGISTRY_DEV):$(IMG_TAG)" -f Dockerfile.$(GOARCH).run .
 	@if [ "$(GIT_BRANCH)" = "master" ]; then \
@@ -167,7 +168,8 @@ gobgp: vendor/github.com/osrg/gobgp/gobgp
 	$(DOCKER) run -v $(PWD):/pwd golang:alpine \
 	    sh -c ' \
 	    apk add -U git && \
-	    ln -s /pwd/vendor /go/src && \
+	    rm -rf /go/src && \
+	    ln -sf /pwd/vendor /go/src && \
 	    CGO_ENABLED=0 GOARCH=$(GOARCH) go get github.com/osrg/gobgp/gobgp && \
 	    cp `find /go/bin -type f -name gobgp` /pwd'
 
