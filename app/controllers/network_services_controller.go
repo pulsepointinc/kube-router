@@ -865,6 +865,11 @@ func prepareEndpointForDsr(containerId string, endpointIP string, vip string) er
 	return nil
 }
 
+const (
+	WeightedRoundRobin      string = "wrr"
+	WeightedLeastConnection string = "wlc"
+)
+
 func buildServicesInfo() serviceInfoMap {
 	serviceMap := make(serviceInfoMap)
 	for _, svc := range watchers.ServiceWatcher.List() {
@@ -906,6 +911,10 @@ func buildServicesInfo() serviceInfoMap {
 					svcInfo.scheduler = ipvs.DestinationHashing
 				} else if schedulingMethod == ipvs.SourceHashing {
 					svcInfo.scheduler = ipvs.SourceHashing
+				} else if schedulingMethod == WeightedRoundRobin {
+					svcInfo.scheduler = WeightedRoundRobin
+				} else if schedulingMethod == WeightedLeastConnection {
+					svcInfo.scheduler = WeightedLeastConnection
 				}
 			}
 			copy(svcInfo.externalIPs, svc.Spec.ExternalIPs)
