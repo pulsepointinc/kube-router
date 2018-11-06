@@ -3,7 +3,7 @@ GOARCH?=$(shell go env GOARCH)
 DEV_SUFFIX?=-git
 OSX=$(filter Darwin,$(shell uname))
 BUILD_DATE?=$(shell date +%Y-%m-%dT%H:%M:%S%z)
-LOCAL_PACKAGES?=app app/controllers app/options app/watchers utils
+LOCAL_PACKAGES?=cmd/kube-router pkg/cmd pkg/healthcheck pkg/metrics pkg/options pkg/utils pkg/controllers pkg/controllers/netpol pkg/controllers/proxy pkg/controllers/routing
 IMG_NAMESPACE?=cloudnativelabs
 GIT_COMMIT=$(shell git describe --tags --dirty)
 GIT_BRANCH?=$(shell git rev-parse --abbrev-ref HEAD)
@@ -136,7 +136,7 @@ release: push-release github-release ## Pushes a release to DockerHub and GitHub
 
 clean: ## Removes the kube-router binary and Docker images
 	rm -f kube-router
-	$(DOCKER) rmi $(REGISTRY_DEV)
+	$(DOCKER) rmi "$(REGISTRY_DEV):$(IMG_TAG)"
 
 gofmt: ## Tells you what files need to be gofmt'd.
 	@build/verify-gofmt.sh

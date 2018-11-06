@@ -209,12 +209,18 @@ type NetworkServicesController struct {
 	ln                  LinuxNetworking
 	readyForUpdates     bool
 
-	svcLister cache.Indexer
-	epLister  cache.Indexer
-	podLister cache.Indexer
+	svcLister    cache.Indexer
+	epLister     cache.Indexer
+	podLister    cache.Indexer
+	nodeListener cache.Indexer
 
 	ServiceEventHandler   cache.ResourceEventHandler
 	EndpointsEventHandler cache.ResourceEventHandler
+	NodeEventHandler      cache.ResourceEventHandler
+
+	nodesMap             nodeInfoMap
+	nodeWeightAnnotation string
+	defaultNodeWeight    int
 }
 
 // internal representation of kubernetes service
@@ -244,10 +250,20 @@ type endpointsInfo struct {
 	ip      string
 	port    int
 	isLocal bool
+	weight  int
 }
 
 // map of all endpoints, with unique service id(namespace name, service name, port) as key
 type endpointsInfoMap map[string][]endpointsInfo
+
+// internal representation of nodes
+type nodeInfo struct {
+	nodeName string
+	weight   int
+}
+
+//map of all nodes by the node name
+type nodeInfoMap map[string]*nodeInfo
 
 // Run periodically sync ipvs configuration to reflect desired state of services and endpoints
 func (nsc *NetworkServicesController) Run(healthChan chan<- *healthcheck.ControllerHeartbeat, stopCh <-chan struct{}, wg *sync.WaitGroup) error {
@@ -315,6 +331,7 @@ func (nsc *NetworkServicesController) sync() error {
 	defer nsc.mu.Unlock()
 
 	nsc.serviceMap = nsc.buildServicesInfo()
+	nsc.nodesMap = nsc.buildNodesInfo()
 	nsc.endpointsMap = nsc.buildEndpointsInfo()
 	err = nsc.syncHairpinIptablesRules()
 	if err != nil {
@@ -422,16 +439,32 @@ func (nsc *NetworkServicesController) OnEndpointsUpdate(obj interface{}) {
 	defer nsc.mu.Unlock()
 
 	// build new service and endpoints map to reflect the change
-	newServiceMap := nsc.buildServicesInfo()
-	newEndpointsMap := nsc.buildEndpointsInfo()
+	nsc.buildAndSyncEndpoints(ep, nil)
+}
 
-	if len(newEndpointsMap) != len(nsc.endpointsMap) || !reflect.DeepEqual(newEndpointsMap, nsc.endpointsMap) {
-		nsc.endpointsMap = newEndpointsMap
-		nsc.serviceMap = newServiceMap
-		glog.V(1).Infof("Syncing IPVS services sync for update to endpoint: %s/%s", ep.Namespace, ep.Name)
-		nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
+func (nsc *NetworkServicesController) buildAndSyncEndpoints(ep *api.Endpoints, node *api.Node) {
+	if len(nsc.nodesMap) != 0 {
+		newServiceMap := nsc.buildServicesInfo()
+		newEndpointsMap := nsc.buildEndpointsInfo()
+
+		if len(newEndpointsMap) != len(nsc.endpointsMap) || !reflect.DeepEqual(newEndpointsMap, nsc.endpointsMap) {
+			nsc.endpointsMap = newEndpointsMap
+			nsc.serviceMap = newServiceMap
+			if ep != nil {
+				glog.V(1).Infof("Syncing IPVS services sync for update to endpoint: %s/%s", ep.Namespace, ep.Name)
+			} else if node != nil {
+				glog.V(1).Infof("Syncing IPVS services sync for update to node: %s", node.Name)
+			}
+			nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
+		} else {
+			if ep != nil {
+				glog.V(1).Infof("Skipping IPVS services sync on endpoint: %s/%s update as nothing changed", ep.Namespace, ep.Name)
+			} else if node != nil {
+				glog.V(1).Infof("Skipping IPVS services sync on node: %s update as nothing changed", node.Name)
+			}
+		}
 	} else {
-		glog.V(1).Infof("Skipping IPVS services sync on endpoint: %s/%s update as nothing changed", ep.Namespace, ep.Name)
+		glog.V(1).Info("Skipping building and syncing of endpoints because node info map is not populated yet")
 	}
 }
 
@@ -462,6 +495,32 @@ func (nsc *NetworkServicesController) OnServiceUpdate(obj interface{}) {
 		nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
 	} else {
 		glog.V(1).Infof("Skipping syncing IPVS services for update to service: %s/%s as nothing changed", svc.Namespace, svc.Name)
+	}
+}
+
+// OnNodeUpdate handle change in node update from the API server
+func (nsc *NetworkServicesController) OnNodeUpdate(obj interface{}) {
+	node, ok := obj.(*api.Node)
+	if !ok {
+		glog.Error("could not convert node update object to *v1.Node")
+		return
+	}
+
+	glog.V(1).Infof("Received update to node: %s from watch API", node.Name)
+	if !nsc.readyForUpdates {
+		glog.V(3).Infof("Skipping update to node: %s, controller still performing bootup full-sync", node.Name)
+		return
+	}
+	nsc.mu.Lock()
+	defer nsc.mu.Unlock()
+	newNodeMap := nsc.buildNodesInfo()
+
+	if len(newNodeMap) != len(nsc.nodesMap) || !reflect.DeepEqual(newNodeMap, nsc.nodesMap) {
+		nsc.nodesMap = newNodeMap
+		glog.V(2).Info("Node info has changed, rebuilding endpoints")
+		nsc.buildAndSyncEndpoints(nil, node)
+	} else {
+		glog.V(1).Info("Skipping ipvs server sync on node update because nothing changed")
 	}
 }
 
@@ -686,7 +745,7 @@ func (nsc *NetworkServicesController) syncIpvsServices(serviceInfoMap serviceInf
 				Address:       net.ParseIP(endpoint.ip),
 				AddressFamily: syscall.AF_INET,
 				Port:          uint16(endpoint.port),
-				Weight:        1,
+				Weight:        endpoint.weight,
 			}
 
 			if !svc.local || (svc.local && endpoint.isLocal) {
@@ -897,7 +956,7 @@ func (ln *linuxNetworking) prepareEndpointForDsr(containerId string, endpointIP 
 	glog.V(1).Infof("Current network namespace before netns.Set: " + activeNetworkNamespaceHandle.String())
 	activeNetworkNamespaceHandle.Close()
 
-	dockerClient, err := client.NewEnvClient()
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		return errors.New("Failed to get docker client due to " + err.Error())
 	}
@@ -1037,6 +1096,11 @@ func (ln *linuxNetworking) prepareEndpointForDsr(containerId string, endpointIP 
 	return nil
 }
 
+const (
+	WeightedRoundRobin      string = "wrr"
+	WeightedLeastConnection string = "wlc"
+)
+
 func (nsc *NetworkServicesController) buildServicesInfo() serviceInfoMap {
 	serviceMap := make(serviceInfoMap)
 	for _, obj := range nsc.svcLister.List() {
@@ -1079,6 +1143,10 @@ func (nsc *NetworkServicesController) buildServicesInfo() serviceInfoMap {
 					svcInfo.scheduler = ipvs.DestinationHashing
 				} else if schedulingMethod == ipvs.SourceHashing {
 					svcInfo.scheduler = ipvs.SourceHashing
+				} else if schedulingMethod == WeightedRoundRobin {
+					svcInfo.scheduler = WeightedRoundRobin
+				} else if schedulingMethod == WeightedLeastConnection {
+					svcInfo.scheduler = WeightedLeastConnection
 				}
 			}
 			copy(svcInfo.externalIPs, svc.Spec.ExternalIPs)
@@ -1120,14 +1188,55 @@ func (nsc *NetworkServicesController) buildEndpointsInfo() endpointsInfoMap {
 				svcId := generateServiceId(ep.Namespace, ep.Name, port.Name)
 				endpoints := make([]endpointsInfo, 0)
 				for _, addr := range epSubset.Addresses {
+					glog.V(2).Infof("Processing %+v", addr)
+					nodeWeight := nsc.defaultNodeWeight
+					var nodeInfo *nodeInfo
+					if addr.NodeName != nil {
+						nodeInfo = nsc.nodesMap[*addr.NodeName]
+					}
+					if nodeInfo == nil && len(addr.IP) > 0 {
+						nodeInfo = nsc.nodesMap[addr.IP]
+					}
+					if nodeInfo != nil {
+						nodeWeight = nodeInfo.weight
+					}
 					isLocal := addr.NodeName != nil && *addr.NodeName == nsc.nodeHostName
-					endpoints = append(endpoints, endpointsInfo{ip: addr.IP, port: int(port.Port), isLocal: isLocal})
+					endpoints = append(endpoints, endpointsInfo{ip: addr.IP, port: int(port.Port), isLocal: isLocal, weight: nodeWeight})
 				}
 				endpointsMap[svcId] = shuffle(endpoints)
 			}
 		}
 	}
 	return endpointsMap
+}
+
+func (nsc *NetworkServicesController) buildNodesInfo() nodeInfoMap {
+	nodeMap := make(nodeInfoMap)
+	for _, obj := range nsc.nodeListener.List() {
+		node := obj.(*api.Node)
+		var weight int
+		var err error
+
+		if weight, err = utils.GetNodeWeight(node, nsc.nodeWeightAnnotation); err != nil {
+			glog.Warningf("Failed to get node weight from annotation %s, using default weight %d: %e", nsc.nodeWeightAnnotation, nsc.defaultNodeWeight, err)
+			weight = nsc.defaultNodeWeight
+		}
+
+		nodeInfo := nodeInfo{
+			nodeName: node.GetName(),
+			weight:   weight,
+		}
+
+		glog.V(2).Infof("Using weight '%d' for node '%s'", nodeInfo.weight, nodeInfo.nodeName)
+		nodeMap[nodeInfo.nodeName] = &nodeInfo
+
+		if ip, err := utils.GetNodeIP(node); err != nil {
+			glog.Warningf("Failed to get node IP for node '%s': %e", nodeInfo.nodeName, err)
+		} else {
+			nodeMap[ip.String()] = &nodeInfo
+		}
+	}
+	return nodeMap
 }
 
 // Add an iptable rule to masquerad outbound IPVS traffic. IPVS nat requires that reverse path traffic
@@ -1893,13 +2002,26 @@ func (nsc *NetworkServicesController) newSvcEventHandler() cache.ResourceEventHa
 			nsc.OnServiceUpdate(obj)
 		},
 	}
+}
 
+func (nsc *NetworkServicesController) newNodeEventHandler() cache.ResourceEventHandler {
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			nsc.OnNodeUpdate(obj)
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			nsc.OnNodeUpdate(newObj)
+		},
+		DeleteFunc: func(obj interface{}) {
+			nsc.OnNodeUpdate(obj)
+		},
+	}
 }
 
 // NewNetworkServicesController returns NetworkServicesController object
 func NewNetworkServicesController(clientset kubernetes.Interface,
 	config *options.KubeRouterConfig, svcInformer cache.SharedIndexInformer,
-	epInformer cache.SharedIndexInformer, podInformer cache.SharedIndexInformer) (*NetworkServicesController, error) {
+	epInformer cache.SharedIndexInformer, podInformer cache.SharedIndexInformer, nodeInfomer cache.SharedIndexInformer) (*NetworkServicesController, error) {
 
 	var err error
 	ln, err := newLinuxNetworking()
@@ -1968,6 +2090,9 @@ func NewNetworkServicesController(clientset kubernetes.Interface,
 
 	nsc.epLister = epInformer.GetIndexer()
 	nsc.EndpointsEventHandler = nsc.newEndpointsEventHandler()
+
+	nsc.nodeListener = nodeInfomer.GetIndexer()
+	nsc.NodeEventHandler = nsc.newNodeEventHandler()
 
 	rand.Seed(time.Now().UnixNano())
 
