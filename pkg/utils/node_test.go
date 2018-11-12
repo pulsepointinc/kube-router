@@ -224,7 +224,7 @@ func Test_GetNodeWeight(t *testing.T) {
 			errors.New("should fail with an error"),
 		},
 		{
-			"unparable node weight annotation",
+			"unparsable node weight annotation",
 			&apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: nodeName,
