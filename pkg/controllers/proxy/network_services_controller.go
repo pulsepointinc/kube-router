@@ -2083,6 +2083,11 @@ func NewNetworkServicesController(clientset kubernetes.Interface,
 	}
 	nsc.nodeIP = NodeIP
 
+	nsc.nodeWeightAnnotation = config.NodeWeightAnnotation
+	glog.V(2).Infof("Network services controller using '%s' node weight annotation", nsc.nodeWeightAnnotation)
+	nsc.defaultNodeWeight = int(config.NodeDefaultWeight)
+	glog.V(2).Infof("Network services controller using '%d' as default node weight", nsc.defaultNodeWeight)
+
 	nsc.podLister = podInformer.GetIndexer()
 
 	nsc.svcLister = svcInformer.GetIndexer()
