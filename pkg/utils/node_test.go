@@ -224,7 +224,7 @@ func Test_GetNodeWeight(t *testing.T) {
 			errors.New("should fail with an error"),
 		},
 		{
-			"unparsable node weight annotation",
+			"unparseable node weight annotation",
 			&apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: nodeName,
@@ -254,6 +254,62 @@ func Test_GetNodeWeight(t *testing.T) {
 					t.Logf("expected weight: %v", testcase.weight)
 					t.Error("did not get expected node weight")
 				}
+			}
+		})
+	}
+}
+
+func Test_GetNodeEgressIP(t *testing.T) {
+	var nodeName, podEgressIPAnnotation = "test-node", "egress-ip"
+
+	testcases := []struct {
+		name     string
+		node     *apiv1.Node
+		egressIP net.IP
+	}{
+		{
+			"has node annotation",
+			&apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+					Annotations: map[string]string{
+						podEgressIPAnnotation: "10.10.10.10",
+					},
+				},
+			},
+			net.ParseIP("10.10.10.10"),
+		},
+		{
+			"missing pod egress IP annotation",
+			&apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        nodeName,
+					Annotations: map[string]string{},
+				},
+			},
+			nil,
+		},
+		{
+			"unparseable egress IP annotation",
+			&apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+					Annotations: map[string]string{
+						podEgressIPAnnotation: "this is not an IP",
+					},
+				},
+			},
+			nil,
+		},
+	}
+
+	for _, testcase := range testcases {
+		t.Run(testcase.name, func(t *testing.T) {
+			egressIP := GetNodeEgressIP(testcase.node, podEgressIPAnnotation)
+			if !egressIP.Equal(testcase.egressIP) {
+				t.Logf("actual egressIP: %s", egressIP.String())
+				t.Logf("expected egressIP: %s", testcase.egressIP.String())
+				t.Error("did not get expected node egressIP")
 			}
 		})
 	}
