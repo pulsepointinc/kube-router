@@ -30,14 +30,19 @@ var (
 
 func (nrc *NetworkRoutingController) preparePodEgress(node *apiv1.Node, kubeRouterConfig *options.KubeRouterConfig) {
 	if nrc.egressIP != nil {
-		args := podEgressArgs4
+		var args []string
 
 		if nrc.isIpv6 {
-			args = podEgressArgs6
+			args = make([]string, len(podEgressArgs6)-1)
+			copy(args, podEgressArgs6[:len(args)])
+			podEgressArgsBad6 = append(podEgressArgsBad6, podEgressArgs6)
+		} else {
+			args = make([]string, len(podEgressArgs4)-1)
+			copy(args, podEgressArgs4[:len(args)])
+			podEgressArgsBad4 = append(podEgressArgsBad4, podEgressArgs4)
 		}
 
-		args = args[0 : len(args)-1]
-		args = append(args, "SNAT", "--to", nrc.egressIP.String())
+		args = append(args, "SNAT", "--to-source", nrc.egressIP.String())
 
 		if nrc.isIpv6 {
 			podEgressArgs6 = args
