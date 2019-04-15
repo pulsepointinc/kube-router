@@ -22,6 +22,7 @@ type KubeRouterConfig struct {
 	ClusterAsn              uint
 	ClusterCIDR             string
 	DisableSrcDstCheck      bool
+	EgressIPAnnotation      string
 	EnableCNI               bool
 	EnableiBGP              bool
 	EnableOverlay           bool
@@ -153,4 +154,8 @@ func (s *KubeRouterConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.NodeWeightAnnotation, "node-weight-annotation", "kube-router.io/node.weight",
 		"Node annotation to determine the endpoint's weight based on the node it is running on. "+
 			"If no annotation is found the \"node-default-weight\" will be used. Default \"kube-router.io/node.weight\"")
+	fs.StringVar(&s.EgressIPAnnotation, "pod-egress-ip-annotation", "kube-router.io/pod.egress.ip",
+		"Node annotation to determine the ip to use for pod egress. "+
+			"If no annotation is found on the node, the pod source ip will be masqueraded to the node ip if pod egress is enabled.")
+
 }

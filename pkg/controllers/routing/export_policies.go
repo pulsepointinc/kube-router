@@ -53,6 +53,12 @@ func (nrc *NetworkRoutingController) addExportPolicies() error {
 	// creates prefix set to represent all the advertisable IP associated with the services
 	advIpPrefixList := make([]config.Prefix, 0)
 	advIps, _, _ := nrc.getAllVIPs()
+
+	//add pod egress ip to allow advertisements
+	if nrc.egressIP != nil {
+		advIps = append(advIps, nrc.egressIP.String())
+	}
+
 	for _, ip := range advIps {
 		advIpPrefixList = append(advIpPrefixList, config.Prefix{IpPrefix: ip + "/32"})
 	}
