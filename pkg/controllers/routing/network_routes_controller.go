@@ -162,14 +162,14 @@ func (nrc *NetworkRoutingController) Run(healthChan chan<- *healthcheck.Controll
 	if nrc.enablePodEgress {
 		glog.V(1).Infoln("Enabling Pod egress.")
 
-		err = nrc.createPodEgressRule()
+		err = nrc.createPodEgressRules()
 		if err != nil {
 			glog.Errorf("Error enabling Pod egress: %s", err.Error())
 		}
 	} else {
 		glog.V(1).Infoln("Disabling Pod egress.")
 
-		err = nrc.deletePodEgressRule()
+		err = nrc.deletePodEgressRules()
 		if err != nil {
 			glog.Warningf("Error cleaning up Pod Egress related networking: %s", err)
 		}
@@ -466,7 +466,7 @@ func (nrc *NetworkRoutingController) injectRoute(path *table.Path) error {
 // Cleanup performs the cleanup of configurations done
 func (nrc *NetworkRoutingController) Cleanup() {
 	// Pod egress cleanup
-	err := nrc.deletePodEgressRule()
+	err := nrc.deletePodEgressRules()
 	if err != nil {
 		glog.Warningf("Error deleting Pod egress iptable rule: %s", err.Error())
 	}
