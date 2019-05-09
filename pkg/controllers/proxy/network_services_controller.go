@@ -321,6 +321,9 @@ func (nsc *NetworkServicesController) Run(healthChan chan<- *healthcheck.Control
 			glog.Info("Shutting down network services controller")
 			return nil
 		case <-t.C:
+			if err != nil {
+				healthcheck.SendHeartBeat(healthChan, "NSC")
+			}
 		}
 	}
 }
