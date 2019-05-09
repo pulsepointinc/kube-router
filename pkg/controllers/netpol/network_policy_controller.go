@@ -152,7 +152,7 @@ func (npc *NetworkPolicyController) Run(healthChan chan<- *healthcheck.Controlle
 			glog.Infof("Shutting down network policies controller")
 			return
 		case <-t.C:
-			if err != nil {
+			if err == nil {
 				healthcheck.SendHeartBeat(healthChan, "NPC")
 			}
 		}
