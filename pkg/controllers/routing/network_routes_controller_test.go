@@ -1,7 +1,8 @@
 package routing
 
 import (
-	"errors"
+	"fmt"
+	"github.com/pkg/errors"
 	"net"
 	"os"
 	"reflect"
@@ -644,14 +645,19 @@ func Test_nodeHasEndpointsForService(t *testing.T) {
 }
 
 func Test_advertisePodRoute(t *testing.T) {
+	cniConfFile := "/tmp/kube-router-cni"
+	validCniConfFileContent := `{"bridge":"kube-bridge","ipam":{"subnet":"172.20.0.0/24","type":"host-local"},"isDefaultGateway":true,"name":"kubernetes","type":"bridge"}`
+	invalidCniConfFileContent := ``
 	testcases := []struct {
 		name        string
 		nrc         *NetworkRoutingController
 		envNodeName string
 		node        *v1core.Node
 		// the key is the subnet from the watch event
-		watchEvents map[string]bool
-		err         error
+		watchEvents        map[string]bool
+		err                error
+		cniConfFile        string
+		cniConfFileContent string
 	}{
 		{
 			"add bgp path for pod cidr using NODE_NAME",
@@ -671,6 +677,8 @@ func Test_advertisePodRoute(t *testing.T) {
 				"172.20.0.0/24": true,
 			},
 			nil,
+			cniConfFile,
+			invalidCniConfFileContent,
 		},
 		{
 			"add bgp path for pod cidr using hostname override",
@@ -691,6 +699,8 @@ func Test_advertisePodRoute(t *testing.T) {
 				"172.20.0.0/24": true,
 			},
 			nil,
+			cniConfFile,
+			invalidCniConfFileContent,
 		},
 		{
 			"add bgp path for pod cidr without NODE_NAME or hostname override",
@@ -706,8 +716,12 @@ func Test_advertisePodRoute(t *testing.T) {
 					PodCIDR: "172.20.0.0/24",
 				},
 			},
-			map[string]bool{},
-			errors.New("Failed to get pod CIDR allocated for the node due to: Failed to identify the node by NODE_NAME, hostname or --hostname-override"),
+			map[string]bool{
+				"172.20.0.0/24": true,
+			},
+			nil,
+			cniConfFile,
+			validCniConfFileContent,
 		},
 		{
 			"node does not have pod cidr set",
@@ -723,15 +737,52 @@ func Test_advertisePodRoute(t *testing.T) {
 					PodCIDR: "",
 				},
 			},
-			map[string]bool{},
-			errors.New("node.Spec.PodCIDR not set for node: node-1"),
+			map[string]bool{
+				"172.20.0.0/24": true,
+			},
+			nil,
+			cniConfFile,
+			validCniConfFileContent,
+		},
+		{
+			"add bgp path for pod cidr using cni config if apiserver call fails",
+			&NetworkRoutingController{
+				bgpServer: gobgp.NewBgpServer(),
+			},
+			"node-1",
+			nil,
+			map[string]bool{
+				"172.20.0.0/24": true,
+			},
+			nil,
+			cniConfFile,
+			validCniConfFileContent,
+		},
+		{
+			"add bgp path for pod cidr using cni config if apiserver call fails and cni config file parsing fails",
+			&NetworkRoutingController{
+				bgpServer: gobgp.NewBgpServer(),
+			},
+			"node-1",
+			nil,
+			nil,
+			errors.New("Failed to load CNI conf file: error parsing configuration: unexpected end of JSON input"),
+			cniConfFile,
+			invalidCniConfFileContent,
 		},
 	}
 
 	for _, testcase := range testcases {
 		t.Run(testcase.name, func(t *testing.T) {
+			file, err := createFile(testcase.cniConfFileContent, testcase.cniConfFile)
+			if err != nil {
+				t.Fatalf("Failed to create temporary CNI config file: %v", err)
+			}
+			defer os.Remove(file.Name())
+			testcase.nrc.cniConfFile = testcase.cniConfFile
+
 			go testcase.nrc.bgpServer.Serve()
-			err := testcase.nrc.bgpServer.Start(&config.Global{
+			err = testcase.nrc.bgpServer.Start(&config.Global{
 				Config: config.GlobalConfig{
 					As:       1,
 					RouterId: "10.0.0.0",
@@ -745,17 +796,18 @@ func Test_advertisePodRoute(t *testing.T) {
 			w := testcase.nrc.bgpServer.Watch(gobgp.WatchBestPath(false))
 
 			clientset := fake.NewSimpleClientset()
-			_, err = clientset.CoreV1().Nodes().Create(testcase.node)
-			if err != nil {
-				t.Fatalf("failed to create node: %v", err)
+			if testcase.node != nil {
+				_, err = clientset.CoreV1().Nodes().Create(testcase.node)
+				if err != nil {
+					t.Fatalf("failed to create node: %v", err)
+				}
 			}
 			testcase.nrc.clientset = clientset
-
 			os.Setenv("NODE_NAME", testcase.envNodeName)
 			defer os.Unsetenv("NODE_NAME")
 
 			err = testcase.nrc.advertisePodRoute()
-			if !reflect.DeepEqual(err, testcase.err) {
+			if !reflect.DeepEqual(testcase.err, err) && (testcase.err == nil || err == nil || err.Error() != testcase.err.Error()) {
 				t.Logf("actual error: %v", err)
 				t.Logf("expected error: %v", testcase.err)
 				t.Error("did not get expected error")
@@ -2007,4 +2059,18 @@ func waitForBGPWatchEventWithTimeout(timeout time.Duration, expectedNumEvents in
 
 func ptrToString(str string) *string {
 	return &str
+}
+
+func createFile(content, filename string) (*os.File, error) {
+	file, err := os.Create(filename)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create file: %v", err)
+	}
+
+	if _, err = file.Write([]byte(content)); err != nil {
+		return nil, fmt.Errorf("cannot write to file: %v", err)
+	}
+
+	fmt.Println("File is ", file.Name())
+	return file, nil
 }

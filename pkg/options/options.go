@@ -36,6 +36,7 @@ type KubeRouterConfig struct {
 	IPTablesSyncPeriod      time.Duration
 	IpvsSyncPeriod          time.Duration
 	Kubeconfig              string
+	KubeClientTimeout       time.Duration
 	MasqueradeAll           bool
 	Master                  string
 	MetricsEnabled          bool
@@ -65,6 +66,7 @@ func NewKubeRouterConfig() *KubeRouterConfig {
 		IpvsSyncPeriod:     5 * time.Minute,
 		IPTablesSyncPeriod: 5 * time.Minute,
 		RoutesSyncPeriod:   5 * time.Minute,
+		KubeClientTimeout:  1 * time.Minute,
 		EnableOverlay:      true,
 	}
 }
@@ -157,5 +159,6 @@ func (s *KubeRouterConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.EgressIPAnnotation, "pod-egress-ip-annotation", "kube-router.io/pod.egress.ip",
 		"Node annotation to determine the ip to use for pod egress. "+
 			"If no annotation is found on the node, the pod source ip will be masqueraded to the node ip if pod egress is enabled.")
-
+	fs.DurationVar(&s.KubeClientTimeout, "client-timeout", s.KubeClientTimeout,
+		"Timeout for kubernetes client calls (e.g. '5s', '1m', '2h22m'). Must be greater than 0.")
 }

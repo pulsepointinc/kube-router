@@ -31,7 +31,7 @@ func (nrc *NetworkRoutingController) addExportPolicies() error {
 		return nil
 	}
 
-	cidr, err := utils.GetPodCidrFromNodeSpec(nrc.clientset, nrc.hostnameOverride)
+	cidr, err := nrc.getPodCidr()
 	if err != nil {
 		return err
 	}

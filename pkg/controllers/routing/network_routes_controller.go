@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"k8s.io/api/core/v1"
 	"net"
 	"os"
 	"os/exec"
@@ -350,8 +351,24 @@ func (nrc *NetworkRoutingController) watchBgpUpdates() {
 	}
 }
 
-func (nrc *NetworkRoutingController) advertisePodRoute() error {
+func (nrc *NetworkRoutingController) getPodCidr() (string, error) {
 	cidr, err := utils.GetPodCidrFromNodeSpec(nrc.clientset, nrc.hostnameOverride)
+	if err != nil {
+		glog.Errorf("Failed to get pod cidr using api server, trying to parse cni config file: %s", err.Error())
+		cidrIP, err := utils.GetPodCidrFromCniSpec(nrc.cniConfFile)
+		if err != nil {
+			return "", err
+		} else {
+			glog.V(3).Infof("Found cidr in cni config file: %s", cidrIP.String())
+		}
+		cidr = cidrIP.String()
+	}
+
+	return cidr, nil
+}
+
+func (nrc *NetworkRoutingController) advertisePodRoute() error {
+	cidr, err := nrc.getPodCidr()
 	if err != nil {
 		return err
 	}
@@ -495,18 +512,15 @@ func (nrc *NetworkRoutingController) Cleanup() {
 }
 
 func (nrc *NetworkRoutingController) syncNodeIPSets() error {
-	// Get the current list of the nodes from API server
-	nodes, err := nrc.clientset.CoreV1().Nodes().List(metav1.ListOptions{})
-	if err != nil {
-		return errors.New("Failed to list nodes from API server: " + err.Error())
-	}
+	var err error
+	nodes := nrc.getNodes()
 
 	// Collect active PodCIDR(s) and NodeIPs from nodes
 	currentPodCidrs := make([]string, 0)
 	currentNodeIPs := make([]string, 0)
-	for _, node := range nodes.Items {
+	for _, node := range nodes {
 		currentPodCidrs = append(currentPodCidrs, node.Spec.PodCIDR)
-		nodeIP, err := utils.GetNodeIP(&node)
+		nodeIP, err := utils.GetNodeIP(node)
 		if err != nil {
 			return fmt.Errorf("Failed to find a node IP: %s", err)
 		}
@@ -544,6 +558,27 @@ func (nrc *NetworkRoutingController) syncNodeIPSets() error {
 	}
 
 	return nil
+}
+
+// getNodes tries to get the fresh set of nodes from apiserver. If it fails it will fall back to cache
+func (nrc *NetworkRoutingController) getNodes() []*v1.Node {
+	var nodeSlice []*v1.Node
+
+	// Get the current list of the nodes from API server
+	nodes, err := nrc.clientset.CoreV1().Nodes().List(metav1.ListOptions{})
+	if err != nil {
+		glog.Errorf("Failed to list nodes from API server, using cache: %s", err.Error())
+		for _, node := range nrc.nodeLister.List() {
+			nodeSlice = append(nodeSlice, node.(*v1.Node))
+		}
+	} else {
+		glog.V(3).Info("Got list of nodes for setting up IP sets from API server")
+		for _, node := range nodes.Items {
+			nodeSlice = append(nodeSlice, &node)
+		}
+	}
+
+	return nodeSlice
 }
 
 func (nrc *NetworkRoutingController) newIptablesCmdHandler() (*iptables.IPTables, error) {

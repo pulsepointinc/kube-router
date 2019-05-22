@@ -30,8 +30,9 @@ var buildDate string
 
 // KubeRouter holds the information needed to run server
 type KubeRouter struct {
-	Client kubernetes.Interface
-	Config *options.KubeRouterConfig
+	Client      kubernetes.Interface
+	WatchClient kubernetes.Interface
+	Config      *options.KubeRouterConfig
 }
 
 // NewKubeRouterDefault returns a KubeRouter object
@@ -52,13 +53,19 @@ func NewKubeRouterDefault(config *options.KubeRouterConfig) (*KubeRouter, error)
 			return nil, errors.New("unable to initialize inclusterconfig: " + err.Error())
 		}
 	}
+	watchclientset, err := kubernetes.NewForConfig(clientconfig)
+	if err != nil {
+		return nil, errors.New("Failed to create Kubernetes watch client: " + err.Error())
+	}
 
+	clientconfig.Timeout = config.KubeClientTimeout
+	glog.V(1).Infof("Using timeout %s for calls to api server.", clientconfig.Timeout.String())
 	clientset, err := kubernetes.NewForConfig(clientconfig)
 	if err != nil {
 		return nil, errors.New("Failed to create Kubernetes client: " + err.Error())
 	}
 
-	return &KubeRouter{Client: clientset, Config: config}, nil
+	return &KubeRouter{Client: clientset, WatchClient: watchclientset, Config: config}, nil
 }
 
 // CleanupConfigAndExit performs Cleanup on all three controllers
@@ -92,8 +99,7 @@ func (kr *KubeRouter) Run() error {
 	}
 	wg.Add(1)
 	go hc.RunServer(stopCh, &wg)
-
-	informerFactory := informers.NewSharedInformerFactory(kr.Client, 0)
+	informerFactory := informers.NewSharedInformerFactory(kr.WatchClient, 0)
 	svcInformer := informerFactory.Core().V1().Services().Informer()
 	epInformer := informerFactory.Core().V1().Endpoints().Informer()
 	podInformer := informerFactory.Core().V1().Pods().Informer()

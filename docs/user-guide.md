@@ -34,6 +34,7 @@ Usage of kube-router:
       --bgp-port uint16                   The port open for incoming BGP connections and to use for connecting with other BGP peers. (default 179)
       --cache-sync-timeout duration       The timeout for cache synchronization (e.g. '5s', '1m'). Must be greater than 0. (default 1m0s)
       --cleanup-config                    Cleanup iptables rules, ipvs, ipset configuration and exit.
+      --client-timeout duration           Timeout for kubernetes client calls (e.g. '5s', '1m', '2h22m'). Must be greater than 0. (default 1m0s)
       --cluster-asn uint                  ASN number under which cluster nodes will run iBGP.
       --cluster-cidr string               CIDR range of pods in the cluster. It is used to identify traffic originating from and destinated to pods.
       --disable-source-dest-check         Disable the source-dest-check attribute for AWS EC2 instances. When this option is false, it must be set some other way. (default true)
