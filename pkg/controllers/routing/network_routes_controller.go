@@ -574,7 +574,8 @@ func (nrc *NetworkRoutingController) getNodes() []*v1.Node {
 	} else {
 		glog.V(3).Info("Got list of nodes for setting up IP sets from API server")
 		for _, node := range nodes.Items {
-			nodeSlice = append(nodeSlice, &node)
+			n := node
+			nodeSlice = append(nodeSlice, &n)
 		}
 	}
 
