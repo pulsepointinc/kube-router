@@ -1019,7 +1019,7 @@ func (nrc *NetworkRoutingController) addEgressIP() error {
 	if err != nil {
 		glog.V(1).Infof("Could not list addresses on egress interface, skipping cleanup")
 	} else {
-		glog.V(3).Infof("Found %d addressed on egress interface", len(addrs))
+		glog.V(3).Infof("Found %d addresses on egress interface", len(addrs))
 		for _, addr := range addrs {
 			if nrc.egressIP.Equal(addr.IP) {
 				exists = true
