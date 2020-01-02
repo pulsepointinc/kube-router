@@ -3,6 +3,7 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io/ioutil"
 	"k8s.io/api/core/v1"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cloudnativelabs/kube-router/pkg/healthcheck"
@@ -35,6 +37,7 @@ import (
 
 const (
 	IFACE_NOT_FOUND = "Link not found"
+	EGRES_INTERFACE = "egress-if"
 
 	customRouteTableID   = "77"
 	customRouteTableName = "kube-router"
@@ -265,6 +268,15 @@ func (nrc *NetworkRoutingController) Run(healthChan chan<- *healthcheck.Controll
 		if nrc.egressIP != nil {
 			glog.V(1).Infof("Performing periodic sync of pod egress IP")
 			nrc.bgpAdvertiseVIP(nrc.egressIP.String())
+			err = nrc.addEgressIP()
+			if err != nil {
+				glog.Errorf("Failed to assign egress ip %s to egress interface: %s, continuing", nrc.egressIP.String(), err.Error())
+			}
+		} else {
+			err = nrc.delEgressIP()
+			if err != nil {
+				glog.Errorf("Failed to delete egress ip %s from egress interface: %s, continuing", nrc.egressIP.String(), err.Error())
+			}
 		}
 
 		glog.V(1).Info("Performing periodic sync of pod CIDR routes")
@@ -819,8 +831,6 @@ func (nrc *NetworkRoutingController) startBgpServer() error {
 	return nil
 }
 
-// func (nrc *NetworkRoutingController) getExternalNodeIPs(
-
 // NewNetworkRoutingController returns new NetworkRoutingController object
 func NewNetworkRoutingController(clientset kubernetes.Interface,
 	kubeRouterConfig *options.KubeRouterConfig,
@@ -979,4 +989,72 @@ func NewNetworkRoutingController(clientset kubernetes.Interface,
 	nrc.NodeEventHandler = nrc.newNodeEventHandler()
 
 	return &nrc, nil
+}
+
+func (nrc *NetworkRoutingController) addEgressIP() error {
+	egressIf, err := netlink.LinkByName(EGRES_INTERFACE)
+	if err != nil {
+		if err.Error() == IFACE_NOT_FOUND {
+			glog.V(1).Infof("Could not find egress interface: %s to assign egress ip, creating one", EGRES_INTERFACE)
+			err = netlink.LinkAdd(&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: EGRES_INTERFACE}})
+			if err != nil {
+				return errors.New("Failed to add egress interface: " + err.Error())
+			}
+			egressIf, err = netlink.LinkByName(EGRES_INTERFACE)
+			if err != nil {
+				return errors.New("Failed to get egress interface after creation: " + err.Error())
+			}
+			err = netlink.LinkSetUp(egressIf)
+			if err != nil {
+				return errors.New("Failed to bring egress interface up: " + err.Error())
+			}
+		} else {
+			return errors.New("Failed to get egress interface: " + err.Error())
+		}
+	}
+
+	addrs, err := netlink.AddrList(egressIf, unix.AF_UNSPEC)
+	exists := false
+
+	if err != nil {
+		glog.V(1).Infof("Could not list addresses on egress interface, skipping cleanup")
+	} else {
+		glog.V(3).Infof("Found %d addresses on egress interface", len(addrs))
+		for _, addr := range addrs {
+			if nrc.egressIP.Equal(addr.IP) {
+				exists = true
+			} else {
+				glog.V(3).Infof("Deleting address %s from egress interface", addr.IP.String())
+				err = netlink.AddrDel(egressIf, &addr)
+				if err != nil {
+					glog.V(1).Infof("Could not delete address %s from egress interface, skipping", addr.IP.String())
+				}
+			}
+		}
+	}
+
+	if !exists {
+		egressAddr := &netlink.Addr{IPNet: &net.IPNet{IP: nrc.egressIP, Mask: net.IPv4Mask(255, 255, 255, 255)}, Scope: syscall.RT_SCOPE_LINK}
+		return netlink.AddrAdd(egressIf, egressAddr)
+	} else {
+		glog.V(1).Infof("Address %s already exists on egress interface, nothing to add", nrc.egressIP.String())
+	}
+
+	return nil
+}
+
+func (nrc *NetworkRoutingController) delEgressIP() error {
+	//remove the whole dummy interface used to attach the egress ip to
+	egressIf, err := netlink.LinkByName(EGRES_INTERFACE)
+
+	if err != nil {
+		if err.Error() == IFACE_NOT_FOUND {
+			glog.V(1).Infof("Could not find egress interface: egress-if to delete")
+			return nil
+		} else {
+			return errors.New("failed to get egress interface: egress-if to delete")
+		}
+	}
+
+	return netlink.LinkDel(egressIf)
 }
