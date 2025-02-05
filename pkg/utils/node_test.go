@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -67,14 +68,14 @@ func Test_GetNodeObject(t *testing.T) {
 					Name: "another-node",
 				},
 			},
-			errors.New("Failed to identify the node by NODE_NAME, hostname or --hostname-override"),
+			errors.New("failed to identify the node by NODE_NAME, hostname or --hostname-override"),
 		},
 	}
 
 	for _, testcase := range testcases {
 		t.Run(testcase.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset()
-			_, err := clientset.Core().Nodes().Create(testcase.existingNode)
+			_, err := clientset.CoreV1().Nodes().Create(context.Background(), testcase.existingNode, metav1.CreateOptions{})
 			if err != nil {
 				t.Fatalf("failed to create existing nodes for test: %v", err)
 			}
@@ -174,7 +175,7 @@ func Test_GetNodeIP(t *testing.T) {
 
 	for _, testcase := range testcases {
 		t.Run(testcase.name, func(t *testing.T) {
-			ip, err := GetNodeIP(testcase.node)
+			ip, err := GetPrimaryNodeIP(testcase.node)
 			if !reflect.DeepEqual(err, testcase.err) {
 				t.Logf("actual error: %v", err)
 				t.Logf("expected error: %v", testcase.err)

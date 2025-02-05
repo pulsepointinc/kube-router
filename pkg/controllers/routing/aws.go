@@ -10,35 +10,42 @@ import (
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog/v2"
+
+	v1core "k8s.io/api/core/v1"
+)
+
+const (
+	awsThrottlingRequestDelay = 1000 * time.Millisecond
+	awsMaxRetries             = 5
 )
 
 // disableSourceDestinationCheck disables src-dst check of all the VM's when cluster
 // is provisioned on AWS. EC2 by default drops any packets originating or destination
 // to a VM with IP other than that of VM's ip. This check needs to be disabled so that
-// cross node pod-to-pod traffic can be sent and recived by a VM.
+// cross node pod-to-pod traffic can be sent and received by a VM.
 func (nrc *NetworkRoutingController) disableSourceDestinationCheck() {
-	nodes, err := nrc.clientset.CoreV1().Nodes().List(metav1.ListOptions{})
-	if err != nil {
-		glog.Errorf("Failed to list nodes from API server due to: %s. Can not perform BGP peer sync", err.Error())
-		return
-	}
+	nodes := nrc.nodeLister.List()
 
-	for _, node := range nodes.Items {
+	for _, obj := range nodes {
+		node := obj.(*v1core.Node)
 		if node.Spec.ProviderID == "" || !strings.HasPrefix(node.Spec.ProviderID, "aws") {
 			return
 		}
 		providerID := strings.Replace(node.Spec.ProviderID, "///", "//", 1)
 		URL, err := url.Parse(providerID)
+		if err != nil {
+			klog.Errorf("Failed to parse URL for providerID " + providerID + " : " + err.Error())
+			return
+		}
 		instanceID := URL.Path
 		instanceID = strings.Trim(instanceID, "/")
 
-		sess, _ := session.NewSession(aws.NewConfig().WithMaxRetries(5))
+		sess, _ := session.NewSession(aws.NewConfig().WithMaxRetries(awsMaxRetries))
 		metadataClient := ec2metadata.New(sess)
 		region, err := metadataClient.Region()
 		if err != nil {
-			glog.Errorf("Failed to disable source destination check due to: " + err.Error())
+			klog.Errorf("Failed to disable source destination check due to: " + err.Error())
 			return
 		}
 		sess.Config.Region = aws.String(region)
@@ -52,18 +59,19 @@ func (nrc *NetworkRoutingController) disableSourceDestinationCheck() {
 			},
 		)
 		if err != nil {
-			awserr := err.(awserr.Error)
-			if awserr.Code() == "UnauthorizedOperation" {
+			awsErr := err.(awserr.Error)
+			if awsErr.Code() == "UnauthorizedOperation" {
 				nrc.ec2IamAuthorized = false
-				glog.Errorf("Node does not have necessary IAM creds to modify instance attribute. So skipping disabling src-dst check.")
+				klog.Errorf("Node does not have necessary IAM creds to modify instance attribute. So skipping " +
+					"disabling src-dst check.")
 				return
 			}
-			glog.Errorf("Failed to disable source destination check due to: %v", err.Error())
+			klog.Errorf("Failed to disable source destination check due to: %v", err.Error())
 		} else {
-			glog.Infof("Disabled source destination check for the instance: " + instanceID)
+			klog.Infof("Disabled source destination check for the instance: " + instanceID)
 		}
 
 		// to prevent EC2 rejecting API call due to API throttling give a delay between the calls
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(awsThrottlingRequestDelay)
 	}
 }

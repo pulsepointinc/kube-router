@@ -1,11 +1,12 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
 
-	"github.com/docker/libnetwork/ipvs"
+	"github.com/moby/ipvs"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/vishvananda/netlink"
@@ -33,10 +34,10 @@ func (lnm *LinuxNetworkingMockImpl) getKubeDummyInterface() (netlink.Link, error
 	iface, err := netlink.LinkByName("lo")
 	return iface, err
 }
-func (lnm *LinuxNetworkingMockImpl) setupPolicyRoutingForDSR() error {
+func (lnm *LinuxNetworkingMockImpl) setupPolicyRoutingForDSR(setupIPv4, setupIPv6 bool) error {
 	return nil
 }
-func (lnm *LinuxNetworkingMockImpl) setupRoutesForExternalIPForDSR(s serviceInfoMap) error {
+func (lnm *LinuxNetworkingMockImpl) setupRoutesForExternalIPForDSR(s serviceInfoMap, setupIPv4, setupIPv6 bool) error {
 	return nil
 }
 func (lnm *LinuxNetworkingMockImpl) ipvsGetServices() ([]*ipvs.Service, error) {
@@ -46,20 +47,22 @@ func (lnm *LinuxNetworkingMockImpl) ipvsGetServices() ([]*ipvs.Service, error) {
 	copy(svcsCopy, lnm.ipvsSvcs)
 	return svcsCopy, nil
 }
-func (lnm *LinuxNetworkingMockImpl) ipAddrAdd(iface netlink.Link, addr string, addRouter bool) error {
+func (lnm *LinuxNetworkingMockImpl) ipAddrAdd(iface netlink.Link, addr, nodeIP string, addRouter bool) error {
 	return nil
 }
-func (lnm *LinuxNetworkingMockImpl) ipvsAddServer(ipvsSvc *ipvs.Service, ipvsDst *ipvs.Destination, local bool, podCidr string) error {
+func (lnm *LinuxNetworkingMockImpl) ipvsAddServer(ipvsSvc *ipvs.Service, ipvsDst *ipvs.Destination) error {
 	return nil
 }
-func (lnm *LinuxNetworkingMockImpl) ipvsAddService(svcs []*ipvs.Service, vip net.IP, protocol, port uint16, persistent bool, scheduler string) (*ipvs.Service, error) {
+func (lnm *LinuxNetworkingMockImpl) ipvsAddService(svcs []*ipvs.Service, vip net.IP, protocol, port uint16,
+	persistent bool, persistentTimeout int32, scheduler string,
+	flags schedFlags) ([]*ipvs.Service, *ipvs.Service, error) {
 	svc := &ipvs.Service{
 		Address:  vip,
 		Protocol: protocol,
 		Port:     port,
 	}
 	lnm.ipvsSvcs = append(lnm.ipvsSvcs, svc)
-	return svc, nil
+	return svcs, svc, nil
 }
 func (lnm *LinuxNetworkingMockImpl) ipvsDelService(ipvsSvc *ipvs.Service) error {
 	for idx, svc := range lnm.ipvsSvcs {
@@ -73,13 +76,7 @@ func (lnm *LinuxNetworkingMockImpl) ipvsDelService(ipvsSvc *ipvs.Service) error 
 func (lnm *LinuxNetworkingMockImpl) ipvsGetDestinations(ipvsSvc *ipvs.Service) ([]*ipvs.Destination, error) {
 	return []*ipvs.Destination{}, nil
 }
-func (lnm *LinuxNetworkingMockImpl) cleanupMangleTableRule(ip string, protocol string, port string, fwmark string) error {
-	return nil
-}
 
-func logf(format string, a ...interface{}) {
-	fmt.Fprintf(GinkgoWriter, "INFO: "+format+"\n", a...)
-}
 func fatalf(format string, a ...interface{}) {
 	msg := fmt.Sprintf("FATAL: "+format+"\n", a...)
 	Fail(msg)
@@ -118,7 +115,6 @@ var _ = Describe("NetworkServicesController", func() {
 	BeforeEach(func() {
 		lnm = NewLinuxNetworkMock()
 		mockedLinuxNetworking = &LinuxNetworkingMock{
-			cleanupMangleTableRuleFunc:         lnm.cleanupMangleTableRule,
 			getKubeDummyInterfaceFunc:          lnm.getKubeDummyInterface,
 			ipAddrAddFunc:                      lnm.ipAddrAdd,
 			ipvsAddServerFunc:                  lnm.ipvsAddServer,
@@ -134,28 +130,28 @@ var _ = Describe("NetworkServicesController", func() {
 	JustBeforeEach(func() {
 		clientset := fake.NewSimpleClientset()
 
-		_, err := clientset.CoreV1().Endpoints("default").Create(testcase.existingEndpoint)
+		_, err := clientset.CoreV1().Endpoints("default").Create(context.Background(), testcase.existingEndpoint, metav1.CreateOptions{})
 		if err != nil {
 			fatalf("failed to create existing endpoints: %v", err)
 		}
 
-		_, err = clientset.CoreV1().Services("default").Create(testcase.existingService)
+		_, err = clientset.CoreV1().Services("default").Create(context.Background(), testcase.existingService, metav1.CreateOptions{})
 		if err != nil {
 			fatalf("failed to create existing services: %v", err)
 		}
 
 		nsc = &NetworkServicesController{
-			nodeIP:       net.ParseIP("10.0.0.0"),
+			primaryIP:    net.ParseIP("10.0.0.0"),
 			nodeHostName: "node-1",
 			ln:           mockedLinuxNetworking,
 		}
 
 		startInformersForServiceProxy(nsc, clientset)
 		waitForListerWithTimeoutG(nsc.svcLister, time.Second*10)
-		waitForListerWithTimeoutG(nsc.epLister, time.Second*10)
+		waitForListerWithTimeoutG(nsc.epSliceLister, time.Second*10)
 
 		nsc.serviceMap = nsc.buildServicesInfo()
-		nsc.endpointsMap = nsc.buildEndpointsInfo()
+		nsc.endpointsMap = nsc.buildEndpointSliceInfo()
 	})
 	Context("service no endpoints with externalIPs", func() {
 		var fooSvc1, fooSvc2 *ipvs.Service
@@ -179,20 +175,14 @@ var _ = Describe("NetworkServicesController", func() {
 		})
 		JustBeforeEach(func() {
 			// pre-inject some foo ipvs Service to verify its deletion
-			fooSvc1, _ = lnm.ipvsAddService(lnm.ipvsSvcs, net.ParseIP("1.2.3.4"), 6, 1234, false, "rr")
-			fooSvc2, _ = lnm.ipvsAddService(lnm.ipvsSvcs, net.ParseIP("5.6.7.8"), 6, 5678, false, "rr")
+			_, fooSvc1, _ = lnm.ipvsAddService(lnm.ipvsSvcs, net.ParseIP("1.2.3.4"), 6, 1234, false, 0, "rr",
+				schedFlags{})
+			_, fooSvc2, _ = lnm.ipvsAddService(lnm.ipvsSvcs, net.ParseIP("5.6.7.8"), 6, 5678, false, 0, "rr",
+				schedFlags{true, true, false})
 			syncErr = nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
 		})
 		It("Should have called syncIpvsServices OK", func() {
 			Expect(syncErr).To(Succeed())
-		})
-		It("Should have called cleanupMangleTableRule for ExternalIPs", func() {
-			Expect(
-				fmt.Sprintf("%v", mockedLinuxNetworking.cleanupMangleTableRuleCalls())).To(
-				Equal(
-					fmt.Sprintf("[{1.1.1.1 tcp 8080 %d} {2.2.2.2 tcp 8080 %d}]",
-						generateFwmark("1.1.1.1", "tcp", "8080"),
-						generateFwmark("2.2.2.2", "tcp", "8080"))))
 		})
 		It("Should have called setupPolicyRoutingForDSR", func() {
 			Expect(

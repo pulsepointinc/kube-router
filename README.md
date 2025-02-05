@@ -1,6 +1,7 @@
 ![logo](https://cdn.rawgit.com/cloudnativelabs/kube-router/64f7700e/Documentation/img/logo-full.svg)
 
-[![Build Status](https://travis-ci.org/cloudnativelabs/kube-router.svg?branch=master)](https://travis-ci.org/cloudnativelabs/kube-router)
+[![Build Status](https://github.com/cloudnativelabs/kube-router/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/cloudnativelabs/kube-router/actions/workflows/ci.yml?query=branch%3Amaster)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cloudnativelabs/kube-router)](https://goreportcard.com/report/github.com/cloudnativelabs/kube-router)
 [![Slack](https://img.shields.io/badge/slack-join%20chat%20%E2%86%92-e01563.svg)](https://kubernetes.slack.com/messages/C8DCQGTSB/)
 [![Docker Pulls kube-router](https://img.shields.io/docker/pulls/cloudnativelabs/kube-router.svg?label=docker+pulls)](https://hub.docker.com/r/cloudnativelabs/kube-router/)
 [![](https://images.microbadger.com/badges/image/cloudnativelabs/kube-router.svg)](https://microbadger.com/images/cloudnativelabs/kube-router "Get your own image badge on microbadger.com")
@@ -90,7 +91,7 @@ A primary motivation for kube-router is performance. The combination of BGP for
 inter-node Pod networking and IPVS for load balanced proxy Services is a perfect
 recipe for high-performance cluster networking at scale. BGP ensures that the
 data path is dynamic and efficient, and IPVS provides in-kernel load balancing
-that has been thouroughly tested and optimized.
+that has been thoroughly tested and optimized.
 
 ## Getting Started
 
@@ -123,12 +124,3 @@ Kube-router build upon following libraries:
 - Netlink: https://github.com/vishvananda/netlink
 - Ipset: https://github.com/janeczku/go-ipset
 - IPVS: https://github.com/docker/libnetwork/
-
-## Sponsorships
-
-E2E Tests sponsored by DigitalOcean
-
-
-<p align="left">
-  <img src="docs/img/do_logo_blue.png"> </image>
-</p>

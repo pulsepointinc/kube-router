@@ -1,5 +1,5 @@
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   labels:
@@ -8,23 +8,27 @@ metadata:
   name: kube-router
   namespace: kube-system
 spec:
+  selector:
+    matchLabels:
+      k8s-app: kube-router
+      tier: node
   template:
     metadata:
       labels:
         k8s-app: kube-router
         tier: node
-      annotations:
-        scheduler.alpha.kubernetes.io/critical-pod: ''
     spec:
+      priorityClassName: system-node-critical
       serviceAccountName: kube-router
       containers:
       - name: kube-router
-        image: cloudnativelabs/kube-router
+        image: docker.io/cloudnativelabs/kube-router
         imagePullPolicy: Always
         args:
         - "--run-router=true"
         - "--run-firewall=false"
         - "--run-service-proxy=false"
+        - "--bgp-graceful-restart=true"
         - "--enable-cni=false"
         - "--enable-ibgp=false"
         - "--enable-overlay=false"
@@ -39,6 +43,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         livenessProbe:
           httpGet:
             path: /healthz
@@ -51,14 +59,23 @@ spec:
             memory: 250Mi
         securityContext:
           privileged: true
+        volumeMounts:
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+          readOnly: false
       hostNetwork: true
       tolerations:
+      - effect: NoSchedule
+        operator: Exists
       - key: CriticalAddonsOnly
         operator: Exists
-      - effect: NoSchedule
-        key: node-role.kubernetes.io/master
+      - effect: NoExecute
         operator: Exists
-
+      volumes:
+        - name: xtables-lock
+          hostPath:
+            path: /run/xtables.lock
+            type: FileOrCreate
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -68,7 +85,7 @@ metadata:
 
 ---
 kind: ClusterRole
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: kube-router
   namespace: kube-system
@@ -101,10 +118,32 @@ rules:
       - get
       - list
       - watch
-
+  - apiGroups:
+      - "coordination.k8s.io"
+    resources:
+      - leases
+    verbs:
+      - get
+      - create
+      - update
+  - apiGroups:
+      - ""
+    resources:
+      - services/status
+    verbs:
+      - update
+  - apiGroups:
+      - "discovery.k8s.io"
+    resources:
+      - endpointslices
+    verbs:
+      - get
+      - list
+      - watch
+      
 ---
 kind: ClusterRoleBinding
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: kube-router
 roleRef:

@@ -5,11 +5,11 @@
 
 This document covers how to contribute to the kube-router project. Kube-router uses github PRs to manage contributions (could be anything from documentation, bug fixes, manifests etc.).
 
-Please read [users guide](./Documentation/README.md#user-guide) and [developers guide](/Documentation/developing.md) for the functionality and internals of kube-router.
+Please read [users guide](./docs/user-guide.md) and [developers guide](/docs/developing.md) for the functionality and internals of kube-router.
 
 ## Filing issues
 
-If you have a question about Kube-router or have a problem using it, please start with contacting us on [community forum](https://gitter.im/kube-router/Lobby) for quick help. If that doesn't answer your questions, or if you think you found a bug, please [file an issue](https://github.com/cloudnativelabs/kube-router/issues).
+If you have a question about Kube-router or have a problem using it, please start with contacting us on [community forum](https://kubernetes.slack.com/messages/C8DCQGTSB/) for quick help. If that doesn't answer your questions, or if you think you found a bug, please [file an issue](https://github.com/cloudnativelabs/kube-router/issues).
 
 ## Contributing Changes
 

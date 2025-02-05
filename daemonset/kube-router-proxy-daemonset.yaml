@@ -9,16 +9,22 @@ metadata:
 data:
   cni-conf.json: |
     {
-      "name":"kubernetes",
-      "type":"bridge",
-      "bridge":"kube-bridge",
-      "isDefaultGateway":true,
-      "ipam": {
-        "type":"host-local"
-      }
+       "cniVersion":"0.3.0",
+       "name":"mynet",
+       "plugins":[
+          {
+             "name":"kubernetes",
+             "type":"bridge",
+             "bridge":"kube-bridge",
+             "isDefaultGateway":true,
+             "ipam":{
+                "type":"host-local"
+             }
+          }
+       ]
     }
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: kube-router
@@ -26,17 +32,23 @@ metadata:
   labels:
     k8s-app: kube-router
 spec:
+  selector:
+    matchLabels:
+      k8s-app: kube-router
   template:
     metadata:
       labels:
         k8s-app: kube-router
-      annotations:
-        scheduler.alpha.kubernetes.io/critical-pod: ''
     spec:
+      priorityClassName: system-node-critical
       containers:
       - name: kube-router
-        image: cloudnativelabs/kube-router
-        args: ["--run-router=false", "--run-firewall=false", "--run-service-proxy=true", "--kubeconfig=/var/lib/kube-router/kubeconfig"]
+        image: docker.io/cloudnativelabs/kube-router
+        args:
+          - "--run-router=false"
+          - "--run-firewall=false"
+          - "--run-service-proxy=true"
+          - "--kubeconfig=/var/lib/kube-router/kubeconfig"
         securityContext:
           privileged: true
         imagePullPolicy: Always
@@ -45,6 +57,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        - name: KUBE_ROUTER_CNI_CONF_FILE
+          value: /etc/cni/net.d/10-kuberouter.conflist
         livenessProbe:
           httpGet:
             path: /healthz
@@ -60,18 +74,24 @@ spec:
         - name: kubeconfig
           mountPath: /var/lib/kube-router/kubeconfig
           readOnly: true
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+          readOnly: false
       initContainers:
       - name: install-cni
-        image: busybox
+        image: docker.io/cloudnativelabs/kube-router
         imagePullPolicy: Always
         command:
         - /bin/sh
         - -c
         - set -e -x;
-          if [ ! -f /etc/cni/net.d/10-kuberouter.conf ]; then
+          if [ ! -f /etc/cni/net.d/10-kuberouter.conflist ]; then
+            if [ -f /etc/cni/net.d/*.conf ]; then
+              rm -f /etc/cni/net.d/*.conf;
+            fi;
             TMP=/etc/cni/net.d/.tmp-kuberouter-cfg;
             cp /etc/kube-router/cni-conf.json ${TMP};
-            mv ${TMP} /etc/cni/net.d/10-kuberouter.conf;
+            mv ${TMP} /etc/cni/net.d/10-kuberouter.conflist;
           fi
         volumeMounts:
         - name: cni-conf-dir
@@ -80,10 +100,11 @@ spec:
           mountPath: /etc/kube-router
       hostNetwork: true
       tolerations:
+      - effect: NoSchedule
+        operator: Exists
       - key: CriticalAddonsOnly
         operator: Exists
-      - effect: NoSchedule
-        key: node-role.kubernetes.io/master
+      - effect: NoExecute
         operator: Exists
       volumes:
       - name: lib-modules
@@ -98,3 +119,7 @@ spec:
       - name: kubeconfig
         hostPath:
           path: /var/lib/kube-router/kubeconfig
+      - name: xtables-lock
+        hostPath:
+          path: /run/xtables.lock
+          type: FileOrCreate
