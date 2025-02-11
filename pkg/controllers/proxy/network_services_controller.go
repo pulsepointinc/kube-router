@@ -287,7 +287,7 @@ func (nsc *NetworkServicesController) Run(healthChan chan<- *healthcheck.Control
 	// https://github.com/cloudnativelabs/kube-router/issues/282
 	err = nsc.setupIpvsFirewall()
 	if err != nil {
-		klog.Fatalf("error setting up ipvs firewall: %s" + err.Error())
+		klog.Fatalf("error setting up ipvs firewall: %s", err.Error())
 	}
 	nsc.ProxyFirewallSetup.Broadcast()
 
@@ -329,7 +329,7 @@ func (nsc *NetworkServicesController) Run(healthChan chan<- *healthcheck.Control
 				klog.V(1).Info("Performing requested full sync of services")
 				err = nsc.doSync()
 				if err != nil {
-					klog.Errorf("Error during full sync in network service controller. Error: " + err.Error())
+					klog.Errorf("Error during full sync in network service controller. Error: %s", err.Error())
 				}
 			case synctypeIpvs:
 				// We call the component pieces of doSync() here because for methods that send this on the channel they
@@ -339,7 +339,7 @@ func (nsc *NetworkServicesController) Run(healthChan chan<- *healthcheck.Control
 				nsc.mu.Lock()
 				err = nsc.syncIpvsServices(nsc.serviceMap, nsc.endpointsMap)
 				if err != nil {
-					klog.Errorf("Error during ipvs sync in network service controller. Error: " + err.Error())
+					klog.Errorf("Error during ipvs sync in network service controller. Error: %s", err.Error())
 				}
 				err = nsc.syncHairpinIptablesRules()
 				if err != nil {
@@ -356,8 +356,8 @@ func (nsc *NetworkServicesController) Run(healthChan chan<- *healthcheck.Control
 			healthcheck.SendHeartBeat(healthChan, "NSC")
 			err := nsc.doSync()
 			if err != nil {
-				klog.Errorf("Error during periodic ipvs sync in network service controller. Error: " + err.Error())
-				klog.Errorf("Skipping sending heartbeat from network service controller as periodic sync failed.")
+				klog.Errorf("Error during periodic ipvs sync in network service controller. Error: %s", err.Error())
+				klog.Error("Skipping sending heartbeat from network service controller as periodic sync failed.")
 			} else {
 				healthcheck.SendHeartBeat(healthChan, "NSC")
 			}
@@ -500,7 +500,7 @@ func (nsc *NetworkServicesController) setupIpvsFirewall() error {
 			"--match-set", getIPSetName(serviceIPPortsSetName, family), "dst,dst", "-j", "ACCEPT"}
 		err := iptablesCmdHandler.AppendUnique("filter", ipvsFirewallChainName, args...)
 		if err != nil {
-			return fmt.Errorf("failed to run iptables command: %s", err.Error())
+			return fmt.Errorf("failed to run iptables command: %w", err)
 		}
 
 		// We exclude the local addresses here as that would otherwise block all traffic to local addresses if any
@@ -511,19 +511,19 @@ func (nsc *NetworkServicesController) setupIpvsFirewall() error {
 			"-j", "REJECT", "--reject-with", icmpRejectType}
 		err = iptablesCmdHandler.AppendUnique("filter", ipvsFirewallChainName, args...)
 		if err != nil {
-			return fmt.Errorf("failed to run iptables command: %s", err.Error())
+			return fmt.Errorf("failed to run iptables command: %w", err)
 		}
 
 		// Pass incoming traffic into our custom chain.
 		ipvsFirewallInputChainRule := getIPVSFirewallInputChainRule(family)
 		exists, err = iptablesCmdHandler.Exists("filter", "INPUT", ipvsFirewallInputChainRule...)
 		if err != nil {
-			return fmt.Errorf("failed to run iptables command: %s", err.Error())
+			return fmt.Errorf("failed to run iptables command: %w", err)
 		}
 		if !exists {
 			err = iptablesCmdHandler.Insert("filter", "INPUT", 1, ipvsFirewallInputChainRule...)
 			if err != nil {
-				return fmt.Errorf("failed to run iptables command: %s", err.Error())
+				return fmt.Errorf("failed to run iptables command: %w", err)
 			}
 		}
 	}
@@ -1131,7 +1131,7 @@ func (nsc *NetworkServicesController) buildEndpointSliceInfo() endpointSliceInfo
 				}
 
 				for _, addr := range ep.Addresses {
-					klog.V(2).Infof("Processing %+v", addr)
+					klog.V(5).Infof("Processing %+v", addr)
 					nodeWeight := nsc.defaultNodeWeight
 					var nodeInfo *nodeInfo
 					// TODO(Pavel): confirm if this logic is correct
@@ -1703,24 +1703,24 @@ func (nsc *NetworkServicesController) cleanupMangleTableRule(ip string, protocol
 	args := []string{"-d", ip, "-m", protocol, "-p", protocol, "--dport", port, "-j", "MARK", "--set-mark", fwmark}
 	exists, err := iptablesCmdHandler.Exists("mangle", "PREROUTING", args...)
 	if err != nil {
-		return fmt.Errorf("Failed to cleanup iptables command to set up FWMARK due to " + err.Error())
+		return fmt.Errorf("failed to cleanup iptables command to set up FWMARK due to %w", err)
 	}
 	if exists {
 		klog.V(2).Infof("removing mangle rule with: iptables -D PREROUTING -t mangle %s", args)
 		err = iptablesCmdHandler.Delete("mangle", "PREROUTING", args...)
 		if err != nil {
-			return fmt.Errorf("Failed to cleanup iptables command to set up FWMARK due to " + err.Error())
+			return fmt.Errorf("failed to cleanup iptables command to set up FWMARK due to %w", err)
 		}
 	}
 	exists, err = iptablesCmdHandler.Exists("mangle", "OUTPUT", args...)
 	if err != nil {
-		return fmt.Errorf("Failed to cleanup iptables command to set up FWMARK due to " + err.Error())
+		return fmt.Errorf("failed to cleanup iptables command to set up FWMARK due to %w", err)
 	}
 	if exists {
 		klog.V(2).Infof("removing mangle rule with: iptables -D OUTPUT -t mangle %s", args)
 		err = iptablesCmdHandler.Delete("mangle", "OUTPUT", args...)
 		if err != nil {
-			return fmt.Errorf("Failed to cleanup iptables command to set up FWMARK due to " + err.Error())
+			return fmt.Errorf("failed to cleanup iptables command to set up FWMARK due to %w", err)
 		}
 	}
 
@@ -1846,12 +1846,12 @@ func (nsc *NetworkServicesController) Cleanup() {
 	dummyVipInterface, err := netlink.LinkByName(KubeDummyIf)
 	if err != nil {
 		if err.Error() != IfaceNotFound {
-			klog.Infof("Dummy interface: " + KubeDummyIf + " does not exist")
+			klog.Infof("Dummy interface: %s does not exist", KubeDummyIf)
 		}
 	} else {
 		err = netlink.LinkDel(dummyVipInterface)
 		if err != nil {
-			klog.Errorf("Could not delete dummy interface " + KubeDummyIf + " due to " + err.Error())
+			klog.Errorf("Could not delete dummy interface %s due to %s", KubeDummyIf, err.Error())
 			return
 		}
 	}
